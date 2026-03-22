@@ -1,0 +1,161 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — shared database for the dashboard
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cliproxyapi-postgres
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      POSTGRES_DB: cliproxyapi
+      POSTGRES_USER: cliproxyapi
+      # NOTE: Only used on first run (volume creation). Changing this later
+      # won't update the DB password. To reset: docker compose down -v
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cliproxyapi -d cliproxyapi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # CLIProxyAPI — OpenAI/Gemini/Claude compatible proxy for CLI OAuth sessions
+  # Docs: https://github.com/router-for-me/CLIProxyAPI
+  # ---------------------------------------------------------------------------
+  cliproxyapi:
+    image: ${CLIPROXYAPI_IMAGE:-eceasy/cli-proxy-api-plus:latest}
+    container_name: cliproxyapi
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    volumes:
+      # Service config (flat EC2 layout — sits beside docker-compose.yml)
+      - ./config.yaml:/CLIProxyAPI/config.yaml
+      # OAuth session tokens (Claude, Gemini, Codex ...)
+      - ${CLIPROXYAPI_AUTH_DIR:-./auths}:/root/.cli-proxy-api
+      # Service logs
+      - ./logs:/CLIProxyAPI/logs
+    environment:
+      DEPLOY: ${CLIPROXYAPI_DEPLOY:-}
+      MANAGEMENT_PASSWORD: ${MANAGEMENT_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8317/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Docker Socket Proxy — restricted Docker API access for the dashboard
+  # Only allows container/image listing and restart — no privileged operations.
+  # ---------------------------------------------------------------------------
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: cliproxyapi-docker-proxy
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+      NETWORKS: 0
+      VOLUMES: 0
+      EXEC: 0
+      SERVICES: 0
+      SWARM: 0
+      NODES: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      SECRETS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      TASKS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2375/_ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # CLIProxyAPI Dashboard — Next.js web UI for managing CLIProxyAPI
+  # Docs: https://github.com/itsmylife44/cliproxyapi-dashboard
+  # ---------------------------------------------------------------------------
+  dashboard:
+    image: ghcr.io/itsmylife44/cliproxyapi-dashboard/dashboard:latest
+    container_name: cliproxyapi-dashboard
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    environment:
+      DATABASE_URL: postgresql://cliproxyapi:${POSTGRES_PASSWORD}@postgres:5432/cliproxyapi
+      CLIPROXYAPI_MANAGEMENT_URL: http://cliproxyapi:8317/v0/management
+      MANAGEMENT_API_KEY: ${MANAGEMENT_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      NODE_ENV: production
+      DOCKER_HOST: tcp://docker-proxy:2375
+      DASHBOARD_URL: https://dashboard.octorouter.octopws.io
+      API_URL: https://octorouter.octopws.io
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cliproxyapi:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # Caddy — reverse proxy + TLS termination
+  # Only service with host port bindings (80/443).
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: cliproxyapi-caddy
+    restart: unless-stopped
+    networks:
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      cliproxyapi:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  frontend:
+    driver: bridge
+    name: cliproxyapi_frontend
+  backend:
+    driver: bridge
+    name: cliproxyapi_backend
+    internal: true
