@@ -23,18 +23,18 @@ OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyA
 Before deploying, you must set the following secrets for the `ops` stage:
 
 ```bash
-sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
-sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
-sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
-sst secret set OctoRouterJwtSecret "$(openssl rand -base64 32)" --stage ops
-sst secret set OctoRouterManagementApiKey "$(openssl rand -hex 32)" --stage ops
+bunx sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
+bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
+bunx sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
+bunx sst secret set OctoRouterJwtSecret "$(openssl rand -base64 32)" --stage ops
+bunx sst secret set OctoRouterManagementApiKey "$(openssl rand -hex 32)" --stage ops
 ```
 
 ### Deploy Command
 Deploy the stack to the `ops` stage:
 
 ```bash
-sst deploy --config apps/octorouter/sst.config.ts --stage ops
+bunx sst deploy --config apps/octorouter/sst.config.ts --stage ops
 ```
 
 ## Post-Deploy Setup
@@ -79,30 +79,38 @@ curl -H "Authorization: Bearer YOUR_API_KEY" https://octorouter.octopws.io/v1/mo
 The dashboard is available at: https://dashboard.octorouter.octopws.io
 
 ## Claude Max OAuth
-Claude OAuth requires an interactive browser flow. Since the instance is remote, you must use an SSH tunnel to handle the callback on your local machine.
+Claude OAuth can be configured directly through the dashboard.
 
-1. **Open SSH Tunnel**: In a new terminal on your local machine, run:
-   ```bash
-   ssh -L 54545:localhost:54545 ec2-user@octorouter.octopws.io
-   ```
-2. **Run OAuth Command**: Back on the EC2 instance, execute the OAuth flow inside the container:
-   ```bash
-   docker exec -it cliproxyapi /CLIProxyAPI claude auth
-   ```
-3. **Complete in Browser**: Follow the URL provided in the terminal, log in to Claude, and complete the authorization. The callback will be handled via the SSH tunnel.
+1. Open the dashboard at https://dashboard.octorouter.octopws.io
+2. Navigate to the Claude OAuth section
+3. Follow the browser-based authorization flow to link your Claude account
+
+After completing the flow, the auth tokens are saved automatically and the service picks them up.
 
 ## Gemini OAuth
-Similar to Claude, Gemini OAuth requires an SSH tunnel for the callback.
+Gemini OAuth requires an SSH tunnel for the callback and a one-shot `docker run` command.
 
-1. **Open SSH Tunnel**: In a new terminal on your local machine, run:
+1. **Open SSH Tunnel**: On your **local machine**, open a tunnel for the OAuth callback:
    ```bash
    ssh -L 8085:localhost:8085 ec2-user@octorouter.octopws.io
    ```
-2. **Run OAuth Command**: On the EC2 instance, execute:
+2. **Run OAuth Command**: On the EC2 instance, run a temporary container for the login flow:
    ```bash
-   docker exec -it cliproxyapi /CLIProxyAPI gemini auth
+   cd /opt/octorouter
+   docker run --rm -it \
+     -p 8085:8085 \
+     -v /opt/octorouter/auths:/root/.cli-proxy-api \
+     -v /opt/octorouter/config.yaml:/CLIProxyAPI/config.yaml:ro \
+     eceasy/cli-proxy-api-plus:latest \
+     ./CLIProxyAPIPlus -login -no-browser
    ```
-3. **Complete in Browser**: Follow the URL, log in to your Google account, and authorize the application.
+3. **Complete in Browser**: Open the Google URL printed in the terminal, log in, and choose **2** (Google One mode) when prompted.
+4. **Restart the service** to pick up the new auth tokens:
+   ```bash
+   docker compose restart cliproxyapi
+   ```
+
+> **Note:** Do not use `docker exec` on the running container for auth — the binary will try to bind port 8317 which is already in use. The `docker run` approach starts a fresh temporary container instead.
 
 ## Maintenance
 
@@ -131,8 +139,9 @@ docker compose logs caddy
 Ensure port 80 and 443 are open in the EC2 Security Group for Let's Encrypt challenges.
 
 ### OAuth Callback Fails
-- Ensure the SSH tunnel is active on the correct port (54545 for Claude, 8085 for Gemini).
-- Check that no other service is using those ports on your local machine.
+- Ensure the SSH tunnel is active on port 8085 for Gemini OAuth.
+- Check that no other service is using that port on your local machine.
+- For Claude, use the dashboard instead — no tunnel needed.
 
 ### Containers Not Starting
 Check the status of the containers:
