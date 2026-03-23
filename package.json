@@ -2,6 +2,12 @@
   "name": "octorouter",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "deploy": "sst deploy --stage ops",
+    "dev": "sst dev --stage ops",
+    "remove": "sst remove --stage ops",
+    "secret": "sst secret --stage ops"
+  },
   "dependencies": {
     "sst": "catalog:",
     "typescript": "catalog:"
