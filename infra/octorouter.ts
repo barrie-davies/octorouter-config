@@ -98,7 +98,7 @@ export function createOctoRouter(vpc: sst.aws.Vpc): OctoRouterOutputs {
     ],
   });
 
-  const servicesDir = path.resolve(__dirname, "../services");
+  const servicesDir = path.resolve(process.cwd(), "services");
   const dockerCompose = fs.readFileSync(path.join(servicesDir, "docker-compose.yml"), "utf8");
   const caddyfile = fs.readFileSync(path.join(servicesDir, "Caddyfile"), "utf8");
   const configExample = fs.readFileSync(path.join(servicesDir, "config.example.yaml"), "utf8");
