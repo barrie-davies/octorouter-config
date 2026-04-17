@@ -28,6 +28,7 @@ bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
 bunx sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
 bunx sst secret set OctoRouterJwtSecret "$(openssl rand -base64 32)" --stage ops
 bunx sst secret set OctoRouterManagementApiKey "$(openssl rand -hex 32)" --stage ops
+bunx sst secret set OctoRouterDeploySecret "$(openssl rand -hex 32)" --stage ops
 ```
 
 ### Deploy Command

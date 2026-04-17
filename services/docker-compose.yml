@@ -111,6 +111,10 @@ services:
       DOCKER_HOST: tcp://docker-proxy:2375
       DASHBOARD_URL: https://dashboard.octorouter.octopws.io
       API_URL: https://octorouter.octopws.io
+      WEBHOOK_HOST: ${WEBHOOK_HOST}
+      DEPLOY_SECRET: ${DEPLOY_SECRET}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
