@@ -131,8 +131,10 @@ chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 mkdir -p /opt/octorouter/auths /opt/octorouter/logs
 
 # Generate .env from SST secrets
+# CLIPROXYAPI_IMAGE intentionally omitted: the compose file pins a versioned tag
+# as its default. The dashboard rewrites this container with the chosen tag on
+# update, so the running version is always parseable from Config.Image.
 cat > /opt/octorouter/.env << ENV_EOF
-CLIPROXYAPI_IMAGE=eceasy/cli-proxy-api-plus:latest
 CLIPROXYAPI_PORT=8317
 CLIPROXYAPI_AUTH_DIR=/opt/octorouter/auths
 CLIPROXYAPI_DEPLOY=cloud

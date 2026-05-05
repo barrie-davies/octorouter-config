@@ -115,9 +115,23 @@ Gemini OAuth requires an SSH tunnel for the callback and a one-shot `docker run`
 
 ## Maintenance
 
-### Update Image
-To update to the latest version of CLIProxyAPI:
+### Update CLIProxyAPI (preferred — from the dashboard)
+The CLIProxyAPI proxy can be upgraded without SSH access:
 
+1. Open https://dashboard.octorouter.octopws.io
+2. The dashboard polls Docker Hub for new tags of `eceasy/cli-proxy-api-plus`. When a newer version is available, an "Update Available" banner appears.
+3. Click the specific version button (e.g. **v6.9.30-0**) in the *Available Versions* row. Avoid the **Update to Latest** button — it sends `version=latest` and unpins the running container's tag, which breaks version display.
+4. After a successful upgrade, **bump the tag in `services/docker-compose.yml`** in this repo and redeploy via SST so fresh installs and host reboots come up on the same version.
+
+How it works: the dashboard's `POST /api/update` calls `docker pull <image>:<version>` then `docker run` with the previous container's env, volumes, ports, and networks (compose plugin isn't installed in the dashboard image, so the compose-based path is skipped). Access to the Docker daemon is brokered through the read-write-restricted `tecnativa/docker-socket-proxy` sidecar (`CONTAINERS`, `IMAGES`, `POST`, `NETWORKS` enabled — everything else denied).
+
+The `cliproxyapi` service in `docker-compose.yml` MUST stay pinned to a versioned tag (e.g. `eceasy/cli-proxy-api-plus:v6.9.28-0`). The dashboard parses the running version from `Config.Image`, so a bare `:latest` tag makes the UI report "latest" forever and the auto-update banner stops working.
+
+> **Drift warning**: dashboard updates only change the running container — they do **not** touch this compose file. If you upgrade via the dashboard but skip step 4, a host reboot or `docker compose up -d` will recreate the container at the older tag still in compose, silently downgrading the proxy. Always bump the tag in this repo after a dashboard update.
+
+> **Known dashboard quirk**: the *Update Available* banner shows even when current and latest match. The dashboard compares the local image config ID against the Docker Hub registry digest — different SHA spaces, never equal. Ignore the banner unless `Latest Version` is genuinely newer than `Current Version`.
+
+### Update CLIProxyAPI (manual fallback, requires SSH)
 ```bash
 cd /opt/octorouter
 docker compose pull && docker compose up -d
@@ -151,6 +165,31 @@ docker compose ps
 ```
 If a container is in a restart loop, check its logs for configuration errors in `config.yaml`.
 
+## Dashboard Deploy Webhook
+
+The dashboard can redeploy itself from its admin panel. This is powered by
+[adnanh/webhook](https://github.com/adnanh/webhook) running on the host
+(systemd: `octorouter-webhook`) and listening on port 9000 on the Docker
+host gateway only — never exposed to the public internet.
+
+Setup is automatic via SST user-data. The `DEPLOY_SECRET` SST secret is
+rendered into both `/opt/octorouter/.env` (picked up by the dashboard
+container) and `/opt/octorouter/webhook/webhook.yaml` (validated as the
+`X-Deploy-Token` header on every hook call).
+
+### Endpoints (called from dashboard container only)
+- `POST http://host.docker.internal:9000/hooks/deploy-dashboard` — pull + recreate dashboard
+- `POST http://host.docker.internal:9000/hooks/deploy-dashboard-nocache` — same (no-cache flag is a no-op for prebuilt images)
+- `POST http://host.docker.internal:9000/hooks/deploy-status` — read last deploy status JSON
+- `POST http://host.docker.internal:9000/hooks/deploy-log` — read last deploy log
+
+### Managing the webhook service
+```bash
+sudo systemctl status octorouter-webhook
+sudo journalctl -u octorouter-webhook -f
+sudo tail -f /var/log/octorouter/dashboard-deploy.log
+```
+
 ## EC2 Directory Layout
 ```
 /opt/octorouter/
@@ -160,5 +199,8 @@ If a container is in a restart loop, check its logs for configuration errors in 
 ├── config.yaml       # edit this manually after deploy
 ├── config.example.yaml
 ├── auths/            # CLIProxyAPI OAuth tokens
-└── logs/             # container logs
+├── logs/             # container logs
+└── webhook/          # adnanh/webhook config + deploy script
+    ├── webhook.yaml
+    └── deploy-dashboard.sh
 ```
