@@ -3,7 +3,8 @@
 export default $config({
   async app(input) {
     const {stage} = input;
-    const region = 'us-east-2';
+    // octoathlete-nonprod default region
+    const region = 'eu-west-2';
     const profile = process.env.AWS_PROFILE;
     return {
       name: 'octorouter',
@@ -18,7 +19,7 @@ export default $config({
   async run() {
     const {octoRouterInfrastructure} = await import('./infra/octorouter');
     const profile = process.env.AWS_PROFILE;
-    const region = 'us-east-2';
+    const region = 'eu-west-2';
     console.info(`Running SST with AWS profile '${profile}' and AWS region '${region}'`);
     return octoRouterInfrastructure();
   }

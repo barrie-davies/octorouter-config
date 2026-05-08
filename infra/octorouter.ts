@@ -1,5 +1,5 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface OctoRouterSecurityResources {
   securityGroupId: $util.Output<string>;
@@ -9,16 +9,22 @@ export interface OctoRouterSecurityResources {
 export interface OctoRouterOutputs {
   OCTOROUTER_IP: $util.Output<string>;
   OCTOROUTER_URL: string;
+  OCTOROUTER_DASHBOARD_URL: string;
+  OCTOROUTER_MANAGEMENT_CENTER_URL: string;
+  DELEGATED_ZONE_NAMESERVERS: $util.Output<string[]>;
 }
 
-export function createOctoRouterSecurity(vpc: sst.aws.Vpc): OctoRouterSecurityResources {
-  // Set via: sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..."
+const ROOT_DOMAIN = 'octinho.com';
+const SUBZONE = 'octorouter.octinho.com';
+const API_DOMAIN = 'octorouter.octinho.com';
+const DASHBOARD_DOMAIN = 'dashboard.octorouter.octinho.com';
+
+export function createOctoRouterSecurity(vpcId: $util.Output<string>): OctoRouterSecurityResources {
   const sshPublicKey = new sst.Secret('OctoRouterSshPublicKey');
-  // Set via: sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32"
   const sshAllowedCidr = new sst.Secret('OctoRouterSshAllowedCidr');
 
   const sg = new aws.ec2.SecurityGroup('OctoRouterSg', {
-    vpcId: vpc.id,
+    vpcId,
     description: 'Security group for OctoRouter CLIProxyAPI',
     tags: {Name: 'octorouter-sg', Service: 'CLIProxyAPI', ManagedBy: 'SST'}
   });
@@ -28,7 +34,7 @@ export function createOctoRouterSecurity(vpc: sst.aws.Vpc): OctoRouterSecurityRe
     fromPort: 22,
     toPort: 22,
     ipProtocol: 'tcp',
-    cidrIpv4: sshAllowedCidr.value, // NOT 0.0.0.0/0 — restricted to operator CIDR
+    cidrIpv4: sshAllowedCidr.value,
     description: 'SSH access (restricted to allowed CIDR)'
   });
   new aws.vpc.SecurityGroupIngressRule('OctoRouterHttpIngress', {
@@ -57,7 +63,6 @@ export function createOctoRouterSecurity(vpc: sst.aws.Vpc): OctoRouterSecurityRe
     description: 'All outbound traffic'
   });
 
-  // Import existing public key — IaC must NOT generate SSH keys
   const keyPair = new aws.ec2.KeyPair('OctoRouterKeyPair', {
     keyName: 'octorouter-key',
     publicKey: sshPublicKey.value,
@@ -70,17 +75,13 @@ export function createOctoRouterSecurity(vpc: sst.aws.Vpc): OctoRouterSecurityRe
   };
 }
 
-export function createOctoRouter(vpc: sst.aws.Vpc): OctoRouterOutputs {
-  const security = createOctoRouterSecurity(vpc);
+export function createOctoRouter(): OctoRouterOutputs {
+  const defaultVpc = aws.ec2.getVpcOutput({default: true});
+  const security = createOctoRouterSecurity(defaultVpc.id);
 
-  // Additional secrets for services requiring runtime credentials
-  // Set via: sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)"
   const postgresPassword = new sst.Secret('OctoRouterPostgresPassword');
-  // Set via: sst secret set OctoRouterJwtSecret "$(openssl rand -base64 32)"
   const jwtSecret = new sst.Secret('OctoRouterJwtSecret');
-  // Set via: sst secret set OctoRouterManagementApiKey "$(openssl rand -hex 32)"
   const managementApiKey = new sst.Secret('OctoRouterManagementApiKey');
-  // Set via: sst secret set OctoRouterDeploySecret "$(openssl rand -hex 32)"
   const deploySecret = new sst.Secret('OctoRouterDeploySecret');
 
   const ami = aws.ec2.getAmiOutput({
@@ -95,7 +96,7 @@ export function createOctoRouter(vpc: sst.aws.Vpc): OctoRouterOutputs {
 
   const subnets = aws.ec2.getSubnetsOutput({
     filters: [
-      {name: 'vpc-id', values: ['vpc-07631f85d7c064e30']},
+      {name: 'vpc-id', values: [defaultVpc.id]},
       {name: 'map-public-ip-on-launch', values: ['true']}
     ]
   });
@@ -108,33 +109,99 @@ export function createOctoRouter(vpc: sst.aws.Vpc): OctoRouterOutputs {
   const webhookDeployScript = fs.readFileSync(path.join(servicesDir, 'webhook/deploy-dashboard.sh'), 'utf8');
   const webhookSystemdUnit = fs.readFileSync(path.join(servicesDir, 'webhook/octorouter-webhook.service'), 'utf8');
 
+  // Static config files are uploaded to S3 and pulled at boot via instance profile,
+  // keeping user-data well below the 16 KB EC2 limit.
+  const configBucket = new aws.s3.BucketV2('OctoRouterConfigBucket', {
+    forceDestroy: true,
+    tags: {Name: 'octorouter-config', Service: 'CLIProxyAPI', ManagedBy: 'SST'}
+  });
+
+  new aws.s3.BucketPublicAccessBlock('OctoRouterConfigBucketPab', {
+    bucket: configBucket.id,
+    blockPublicAcls: true,
+    blockPublicPolicy: true,
+    ignorePublicAcls: true,
+    restrictPublicBuckets: true
+  });
+
+  const uploadObject = (name: string, key: string, content: string) =>
+    new aws.s3.BucketObjectv2(name, {
+      bucket: configBucket.id,
+      key,
+      content,
+      contentType: 'text/plain'
+    });
+
+  uploadObject('OctoRouterDockerCompose', 'docker-compose.yml', dockerCompose);
+  uploadObject('OctoRouterCaddyfile', 'Caddyfile', caddyfile);
+  uploadObject('OctoRouterConfigExample', 'config.example.yaml', configExample);
+  uploadObject('OctoRouterWebhookYaml', 'webhook/webhook.yaml', webhookYaml);
+  uploadObject('OctoRouterWebhookDeployScript', 'webhook/deploy-dashboard.sh', webhookDeployScript);
+  uploadObject('OctoRouterWebhookSystemdUnit', 'webhook/octorouter-webhook.service', webhookSystemdUnit);
+
+  const role = new aws.iam.Role('OctoRouterInstanceRole', {
+    assumeRolePolicy: JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: {Service: 'ec2.amazonaws.com'},
+          Action: 'sts:AssumeRole'
+        }
+      ]
+    }),
+    tags: {Name: 'octorouter-role', Service: 'CLIProxyAPI', ManagedBy: 'SST'}
+  });
+
+  new aws.iam.RolePolicy('OctoRouterInstanceRolePolicy', {
+    role: role.id,
+    policy: configBucket.arn.apply(arn =>
+      JSON.stringify({
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Effect: 'Allow',
+            Action: ['s3:GetObject', 's3:ListBucket'],
+            Resource: [arn, `${arn}/*`]
+          }
+        ]
+      })
+    )
+  });
+
+  const instanceProfile = new aws.iam.InstanceProfile('OctoRouterInstanceProfile', {
+    role: role.name
+  });
+
   const userData = $interpolate`#!/bin/bash
-set -e
+set -euo pipefail
+exec > >(tee -a /var/log/octorouter-bootstrap.log) 2>&1
+echo "[bootstrap] starting at $(date -Iseconds)"
 
-# Update packages
 yum update -y
+yum install -y docker awscli
+systemctl enable --now docker
 
-# Install Docker
-# NOTE: Do NOT install 'curl' here — AL2023 ships curl-minimal which conflicts with curl.
-# curl-minimal is sufficient for all operations below.
-yum install -y docker
-systemctl enable docker
-systemctl start docker
-
-# Install Docker Compose plugin
-# Use curl-minimal (already present on AL2023) with -fsSL flags so failures are fatal under set -e
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \\
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Create app directory
-mkdir -p /opt/octorouter/auths /opt/octorouter/logs
+mkdir -p /opt/octorouter/auths /opt/octorouter/logs /opt/octorouter/webhook /var/log/octorouter
 
-# Generate .env from SST secrets
-# CLIPROXYAPI_IMAGE intentionally omitted: the compose file pins a versioned tag
-# as its default. The dashboard rewrites this container with the chosen tag on
-# update, so the running version is always parseable from Config.Image.
-cat > /opt/octorouter/.env << ENV_EOF
+BUCKET="${configBucket.bucket}"
+aws s3 cp "s3://$BUCKET/docker-compose.yml"                 /opt/octorouter/docker-compose.yml
+aws s3 cp "s3://$BUCKET/Caddyfile"                          /opt/octorouter/Caddyfile
+aws s3 cp "s3://$BUCKET/webhook/webhook.yaml"               /opt/octorouter/webhook/webhook.yaml.tmpl
+aws s3 cp "s3://$BUCKET/webhook/deploy-dashboard.sh"        /opt/octorouter/webhook/deploy-dashboard.sh
+aws s3 cp "s3://$BUCKET/webhook/octorouter-webhook.service" /etc/systemd/system/octorouter-webhook.service
+chmod 0755 /opt/octorouter/webhook/deploy-dashboard.sh
+
+if [ ! -f /opt/octorouter/config.yaml ]; then
+  aws s3 cp "s3://$BUCKET/config.example.yaml" /opt/octorouter/config.yaml
+fi
+
+cat > /opt/octorouter/.env <<ENV_EOF
 CLIPROXYAPI_PORT=8317
 CLIPROXYAPI_AUTH_DIR=/opt/octorouter/auths
 CLIPROXYAPI_DEPLOY=cloud
@@ -145,22 +212,12 @@ MANAGEMENT_API_KEY=${managementApiKey.value}
 DEPLOY_SECRET=${deploySecret.value}
 WEBHOOK_HOST=http://host.docker.internal:9000
 ENV_EOF
+chmod 0600 /opt/octorouter/.env
 
-# Write docker-compose.yml
-cat > /opt/octorouter/docker-compose.yml << 'COMPOSE_EOF'
-${dockerCompose}COMPOSE_EOF
+sed "s|{{DEPLOY_SECRET}}|${deploySecret.value}|g" \\
+  /opt/octorouter/webhook/webhook.yaml.tmpl > /opt/octorouter/webhook/webhook.yaml
+chmod 0600 /opt/octorouter/webhook/webhook.yaml
 
-# Write Caddyfile
-cat > /opt/octorouter/Caddyfile << 'CADDY_EOF'
-${caddyfile}CADDY_EOF
-
-# Write config.yaml from template (user must SSH in and fill real values)
-if [ ! -f /opt/octorouter/config.yaml ]; then
-  cat > /opt/octorouter/config.yaml << 'CONFIG_EOF'
-${configExample}CONFIG_EOF
-fi
-
-# Create swap file if not exists
 if [ ! -f /swapfile ]; then
   fallocate -l 512M /swapfile
   chmod 600 /swapfile
@@ -169,47 +226,29 @@ if [ ! -f /swapfile ]; then
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# Install adnanh/webhook binary (used by dashboard to trigger redeploys from UI)
 if [ ! -x /usr/local/bin/webhook ]; then
   WEBHOOK_VERSION=2.8.2
-  curl -fsSL "https://github.com/adnanh/webhook/releases/download/\${WEBHOOK_VERSION}/webhook-linux-amd64.tar.gz" \\
-    -o /tmp/webhook.tar.gz
+  curl -fsSL "https://github.com/adnanh/webhook/releases/download/\${WEBHOOK_VERSION}/webhook-linux-amd64.tar.gz" -o /tmp/webhook.tar.gz
   tar -xzf /tmp/webhook.tar.gz -C /tmp
-  install -m 0755 "/tmp/webhook-linux-amd64/webhook" /usr/local/bin/webhook
+  install -m 0755 /tmp/webhook-linux-amd64/webhook /usr/local/bin/webhook
   rm -rf /tmp/webhook.tar.gz /tmp/webhook-linux-amd64
 fi
 
-# Webhook config (token substituted from .env at render time)
-mkdir -p /opt/octorouter/webhook /var/log/octorouter
-cat > /opt/octorouter/webhook/webhook.yaml.tmpl << 'WEBHOOK_EOF'
-${webhookYaml}WEBHOOK_EOF
-cat > /opt/octorouter/webhook/deploy-dashboard.sh << 'WEBHOOK_DEPLOY_EOF'
-${webhookDeployScript}WEBHOOK_DEPLOY_EOF
-chmod 0755 /opt/octorouter/webhook/deploy-dashboard.sh
-
-# Render {{DEPLOY_SECRET}} into webhook.yaml using the value we just wrote to .env
-sed "s|{{DEPLOY_SECRET}}|${deploySecret.value}|g" \\
-  /opt/octorouter/webhook/webhook.yaml.tmpl > /opt/octorouter/webhook/webhook.yaml
-chmod 0600 /opt/octorouter/webhook/webhook.yaml
-
-# Install and start systemd unit for webhook
-cat > /etc/systemd/system/octorouter-webhook.service << 'WEBHOOK_SVC_EOF'
-${webhookSystemdUnit}WEBHOOK_SVC_EOF
 systemctl daemon-reload
-systemctl enable octorouter-webhook
-systemctl restart octorouter-webhook
+systemctl enable --now octorouter-webhook
 
-# Start services
 cd /opt/octorouter
 docker compose up -d
+echo "[bootstrap] done at $(date -Iseconds)"
 `;
 
   const instance = new aws.ec2.Instance('OctoRouterInstance', {
-    instanceType: 't3.micro',
+    instanceType: 't3.medium',
     ami: ami.imageId,
     subnetId: subnets.ids[0],
     vpcSecurityGroupIds: [security.securityGroupId],
     keyName: security.keyPairName,
+    iamInstanceProfile: instanceProfile.name,
     rootBlockDevice: {
       volumeSize: 30,
       volumeType: 'gp3',
@@ -228,19 +267,26 @@ docker compose up -d
     allocationId: eip.allocationId
   });
 
-  const zone = aws.route53.getZoneOutput({name: 'octopws.io.'});
+  // Delegated subzone created in deploy account; parent zone octinho.com is in
+  // octoathlete-shared. After first deploy the operator must add an NS record
+  // for `octorouter` in the parent zone pointing at DELEGATED_ZONE_NAMESERVERS.
+  const subzone = new aws.route53.Zone('OctoRouterSubzone', {
+    name: SUBZONE,
+    comment: `Delegated zone for OctoRouter — parent ${ROOT_DOMAIN} in octoathlete-shared`,
+    tags: {Name: SUBZONE, Service: 'CLIProxyAPI', ManagedBy: 'SST'}
+  });
 
-  new aws.route53.Record('OctoRouterDnsRecord', {
-    zoneId: zone.zoneId,
-    name: 'octorouter.octopws.io',
+  new aws.route53.Record('OctoRouterApiDns', {
+    zoneId: subzone.zoneId,
+    name: API_DOMAIN,
     type: 'A',
     ttl: 300,
     records: [eip.publicIp]
   });
 
-  new aws.route53.Record('OctoRouterDashboardDnsRecord', {
-    zoneId: zone.zoneId,
-    name: 'dashboard.octorouter.octopws.io',
+  new aws.route53.Record('OctoRouterDashboardDns', {
+    zoneId: subzone.zoneId,
+    name: DASHBOARD_DOMAIN,
     type: 'A',
     ttl: 300,
     records: [eip.publicIp]
@@ -248,14 +294,15 @@ docker compose up -d
 
   return {
     OCTOROUTER_IP: eip.publicIp,
-    OCTOROUTER_URL: 'https://octorouter.octopws.io'
+    OCTOROUTER_URL: `https://${API_DOMAIN}`,
+    OCTOROUTER_DASHBOARD_URL: `https://${DASHBOARD_DOMAIN}`,
+    OCTOROUTER_MANAGEMENT_CENTER_URL: `https://${API_DOMAIN}/management.html`,
+    DELEGATED_ZONE_NAMESERVERS: subzone.nameServers
   };
 }
 
 export const octoRouterInfrastructure = (): Record<string, string | $util.Output<unknown>> => {
   if ($app.stage !== 'ops') throw new Error(`No domain configured for stage '${$app.stage}'`);
-  const stagingVpcId = 'vpc-07631f85d7c064e30';
-  const vpc = sst.aws.Vpc.get('OctoVpc', stagingVpcId);
-  const octorouter = createOctoRouter(vpc);
+  const octorouter = createOctoRouter();
   return {...octorouter};
 };

@@ -1,6 +1,14 @@
 # OctoRouter
 
-OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyAPI to manage multiple OAuth accounts and provides a unified OpenAI-compatible API, along with a management dashboard.
+OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyAPI to manage multiple OAuth accounts and provides a unified OpenAI-compatible API, a management dashboard, and the upstream Cli-Proxy-API-Management-Center static UI.
+
+## Endpoints
+
+| URL | Purpose |
+|---|---|
+| https://octorouter.octinho.com | OpenAI/Gemini/Claude-compatible proxy API |
+| https://octorouter.octinho.com/management.html | Upstream Cli-Proxy-API-Management-Center UI (bundled with CLIProxyAPI) |
+| https://dashboard.octorouter.octinho.com | Custom dashboard (cliproxyapi-dashboard) |
 
 ## Services
 
@@ -9,20 +17,29 @@ OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyA
 | postgres | — | PostgreSQL 16 database for the dashboard |
 | cliproxyapi | 8317 | OpenAI/Gemini/Claude proxy for CLI OAuth sessions |
 | docker-proxy | — | Restricted Docker socket proxy for container management |
-| dashboard | 3000 | Web UI for managing CLIProxyAPI |
-| caddy | 80, 443 | Reverse proxy with automatic HTTPS |
+| dashboard | 3000 | Custom Web UI for managing CLIProxyAPI |
+| caddy | 80, 443 | Reverse proxy with automatic HTTPS; also serves the management-center static SPA |
+
+## AWS / DNS Layout
+
+- **Deploy account**: `octoathlete-nonprod` (842091916323), region `eu-west-2`
+- **Apex domain**: `octinho.com` lives in `octoathlete-shared` (510537391651)
+- **Delegated zone**: SST creates `octorouter.octinho.com` as a hosted zone in the deploy account. After the first deploy you must add an `NS` record for `octorouter` in the apex zone (in the shared account) pointing to the four NS records output by SST as `DELEGATED_ZONE_NAMESERVERS`.
 
 ## SST Deployment
 
 ### Prerequisites
-- AWS profile configured
+- AWS profile `octoathlete-nonprod` available locally (SSO login: `aws sso login --profile octoathlete-nonprod`)
+- AWS profile `octoathlete-shared` available for the one-time NS delegation step
 - SST installed
 - `bun install` run in the repository root
 
 ### Secrets Setup
-Before deploying, you must set the following secrets for the `ops` stage:
+Before deploying, set the following secrets for the `ops` stage (each command is the deploy account):
 
 ```bash
+export AWS_PROFILE=octoathlete-nonprod
+cd apps/octorouter
 bunx sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
 bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
 bunx sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
@@ -35,8 +52,33 @@ bunx sst secret set OctoRouterDeploySecret "$(openssl rand -hex 32)" --stage ops
 Deploy the stack to the `ops` stage:
 
 ```bash
-bunx sst deploy --config apps/octorouter/sst.config.ts --stage ops
+export AWS_PROFILE=octoathlete-nonprod
+cd apps/octorouter
+bunx sst deploy --stage ops
 ```
+
+### One-time NS Delegation (after first deploy)
+
+SST outputs `DELEGATED_ZONE_NAMESERVERS` — a list of four AWS NS hostnames. Add an `NS` record for the name `octorouter` in the `octinho.com` hosted zone in `octoathlete-shared` pointing to those four nameservers (TTL 300):
+
+```bash
+NS_LIST=$(bunx sst outputs --stage ops | awk -F': ' '/DELEGATED_ZONE_NAMESERVERS/{print $2}')
+ZONE_ID=$(aws --profile octoathlete-shared route53 list-hosted-zones \
+  --query 'HostedZones[?Name==`octinho.com.`].Id' --output text | sed 's|/hostedzone/||')
+
+cat > /tmp/octorouter-ns.json <<JSON
+{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{
+  "Name":"octorouter.octinho.com.","Type":"NS","TTL":300,
+  "ResourceRecords":[
+    $(echo "$NS_LIST" | tr -d '[]"' | tr ',' '\n' | xargs -I{} printf '{"Value":"{}"},' | sed 's/,$//')
+  ]}}]}
+JSON
+
+aws --profile octoathlete-shared route53 change-resource-record-sets \
+  --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/octorouter-ns.json
+```
+
+This is a one-time step. Subsequent deploys reuse the same delegated zone.
 
 ## Post-Deploy Setup
 
@@ -44,7 +86,7 @@ bunx sst deploy --config apps/octorouter/sst.config.ts --stage ops
 Connect to the OctoRouter instance using the `ec2-user`:
 
 ```bash
-ssh ec2-user@octorouter.octopws.io
+ssh ec2-user@octorouter.octinho.com
 ```
 
 ### 2. Set up config.yaml
@@ -73,16 +115,16 @@ docker compose down && docker compose up -d
 Check if the API is responding correctly using your newly generated API key:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_API_KEY" https://octorouter.octopws.io/v1/models
+curl -H "Authorization: Bearer YOUR_API_KEY" https://octorouter.octinho.com/v1/models
 ```
 
 ### 5. Dashboard access
-The dashboard is available at: https://dashboard.octorouter.octopws.io
+The dashboard is available at: https://dashboard.octorouter.octinho.com
 
 ## Claude Max OAuth
 Claude OAuth can be configured directly through the dashboard.
 
-1. Open the dashboard at https://dashboard.octorouter.octopws.io
+1. Open the dashboard at https://dashboard.octorouter.octinho.com
 2. Navigate to the Claude OAuth section
 3. Follow the browser-based authorization flow to link your Claude account
 
@@ -93,7 +135,7 @@ Gemini OAuth requires an SSH tunnel for the callback and a one-shot `docker run`
 
 1. **Open SSH Tunnel**: On your **local machine**, open a tunnel for the OAuth callback:
    ```bash
-   ssh -L 8085:localhost:8085 ec2-user@octorouter.octopws.io
+   ssh -L 8085:localhost:8085 ec2-user@octorouter.octinho.com
    ```
 2. **Run OAuth Command**: On the EC2 instance, run a temporary container for the login flow:
    ```bash
@@ -118,7 +160,7 @@ Gemini OAuth requires an SSH tunnel for the callback and a one-shot `docker run`
 ### Update CLIProxyAPI (preferred — from the dashboard)
 The CLIProxyAPI proxy can be upgraded without SSH access:
 
-1. Open https://dashboard.octorouter.octopws.io
+1. Open https://dashboard.octorouter.octinho.com
 2. The dashboard polls Docker Hub for new tags of `eceasy/cli-proxy-api-plus`. When a newer version is available, an "Update Available" banner appears.
 3. Click the specific version button (e.g. **v6.9.30-0**) in the *Available Versions* row. Avoid the **Update to Latest** button — it sends `version=latest` and unpins the running container's tag, which breaks version display.
 4. After a successful upgrade, **bump the tag in `services/docker-compose.yml`** in this repo and redeploy via SST so fresh installs and host reboots come up on the same version.

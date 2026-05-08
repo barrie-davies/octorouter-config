@@ -114,8 +114,8 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: production
       DOCKER_HOST: tcp://docker-proxy:2375
-      DASHBOARD_URL: https://dashboard.octorouter.octopws.io
-      API_URL: https://octorouter.octopws.io
+      DASHBOARD_URL: https://dashboard.octorouter.octinho.com
+      API_URL: https://octorouter.octinho.com
       WEBHOOK_HOST: ${WEBHOOK_HOST}
       DEPLOY_SECRET: ${DEPLOY_SECRET}
     volumes:

@@ -1,4 +1,4 @@
-octorouter.octopws.io {
+octorouter.octinho.com {
     reverse_proxy cliproxyapi:8317 {
         flush_interval -1
         header_up X-Real-IP {remote_host}
@@ -7,7 +7,7 @@ octorouter.octopws.io {
     }
 }
 
-dashboard.octorouter.octopws.io {
+dashboard.octorouter.octinho.com {
     reverse_proxy dashboard:3000 {
         flush_interval -1
         header_up X-Real-IP {remote_host}
