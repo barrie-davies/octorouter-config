@@ -22,14 +22,14 @@ OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyA
 
 ## AWS / DNS Layout
 
-- **Deploy account**: `octoathlete-nonprod` (842091916323), region `eu-west-2`
+- **Deploy account**: `octoathlete-pr` (842091916323), region `eu-west-2`
 - **Apex domain**: `octinho.com` lives in `octoathlete-shared` (510537391651)
 - **Delegated zone**: SST creates `octorouter.octinho.com` as a hosted zone in the deploy account. After the first deploy you must add an `NS` record for `octorouter` in the apex zone (in the shared account) pointing to the four NS records output by SST as `DELEGATED_ZONE_NAMESERVERS`.
 
 ## SST Deployment
 
 ### Prerequisites
-- AWS profile `octoathlete-nonprod` available locally (SSO login: `aws sso login --profile octoathlete-nonprod`)
+- AWS profile `octoathlete-pr` available locally (SSO login: `aws sso login --profile octoathlete-pr`)
 - AWS profile `octoathlete-shared` available for the one-time NS delegation step
 - SST installed
 - `bun install` run in the repository root
@@ -38,7 +38,7 @@ OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyA
 Before deploying, set the following secrets for the `ops` stage (each command is the deploy account):
 
 ```bash
-export AWS_PROFILE=octoathlete-nonprod
+export AWS_PROFILE=octoathlete-pr
 cd apps/octorouter
 bunx sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
 bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
@@ -52,7 +52,7 @@ bunx sst secret set OctoRouterDeploySecret "$(openssl rand -hex 32)" --stage ops
 Deploy the stack to the `ops` stage:
 
 ```bash
-export AWS_PROFILE=octoathlete-nonprod
+export AWS_PROFILE=octoathlete-pr
 cd apps/octorouter
 bunx sst deploy --stage ops
 ```

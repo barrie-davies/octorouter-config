@@ -3,7 +3,7 @@
 export default $config({
   async app(input) {
     const {stage} = input;
-    // octoathlete-nonprod default region
+    // octoathlete-pr default region
     const region = 'eu-west-2';
     const profile = process.env.AWS_PROFILE;
     return {
