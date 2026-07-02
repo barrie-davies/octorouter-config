@@ -32,7 +32,7 @@ services:
     # Use a versioned tag (NOT :latest) on fresh installs. The dashboard reads
     # the running version from the container's Config.Image — :latest makes it
     # display "latest" forever. Dashboard updates bypass this file entirely.
-    image: ${CLIPROXYAPI_IMAGE:-eceasy/cli-proxy-api:v7.1.19}
+    image: ${CLIPROXYAPI_IMAGE:-eceasy/cli-proxy-api:v7.2.49}
     container_name: cliproxyapi
     restart: unless-stopped
     networks:
@@ -52,7 +52,8 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8317/"]
+      # The image ships no wget/curl; use bash /dev/tcp to probe the API port.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8317"]
       interval: 30s
       timeout: 5s
       retries: 3
