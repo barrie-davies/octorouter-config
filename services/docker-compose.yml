@@ -32,7 +32,7 @@ services:
     # Use a versioned tag (NOT :latest) on fresh installs. The dashboard reads
     # the running version from the container's Config.Image — :latest makes it
     # display "latest" forever. Dashboard updates bypass this file entirely.
-    image: ${CLIPROXYAPI_IMAGE:-eceasy/cli-proxy-api:v7.2.49}
+    image: ${CLIPROXYAPI_IMAGE:-eceasy/cli-proxy-api:v7.2.72}
     container_name: cliproxyapi
     restart: unless-stopped
     networks:
