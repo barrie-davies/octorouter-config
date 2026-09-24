@@ -8,6 +8,13 @@
 host: ""
 port: 8317
 
+# Caddy reaches cliproxyapi over the cliproxyapi_frontend bridge, so without
+# this every client resolves to Caddy's container IP. Since v7.3.x (a962b77d)
+# the default [] ignores X-Forwarded-For, which makes the management
+# failed-login ban (5 failures -> 30 min) lock out every user at once.
+trusted-proxies:
+  - 172.16.0.0/12
+
 tls:
   enable: false
   cert: ""
