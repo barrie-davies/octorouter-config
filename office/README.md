@@ -18,6 +18,22 @@ The compose file, webhook files and config template are the unchanged files from
 `docker-compose.override.yml` holds the office differences and is loaded automatically from
 `/opt/octorouter`. GPUs are not used: the router only forwards requests.
 
+## Isolation from the old router
+
+This is an independent clone of the octorouter.octinho.com setup, not a replacement for it. Nothing is
+shared between them:
+
+- **Secrets:** `bootstrap.sh` generates new ones (Postgres, JWT, management key, deploy secret, first
+  client key). Nothing is copied from the old server, so old client keys and the old management key do
+  not work here.
+- **Provider logins:** none are carried over. You connect accounts fresh in this dashboard.
+- **Network:** reachable only from devices in your own tailnet. The old EC2 server and anyone with old
+  keys have no route to it. Nothing is exposed to the office network or the internet.
+- **Clients:** teammates use a separately named provider and key variable (section 2), so no existing
+  config is pointed at this router by accident. The old team repo (`opencode-config`) is not changed.
+- **Code:** this repo is private to you. The EC2 files still describe the old stack; do not deploy them
+  (see the warning in `../README.md`).
+
 ---
 
 ## 1. One-time setup
@@ -70,19 +86,20 @@ and the stored logins.
      - "sk-team-..."  # alice
    ```
    To remove someone, delete their line and restart `cliproxyapi`.
-3. **Their opencode config.** Same as the old team setup: they put the key in their shell as
-   `OCTOROUTER_API_KEY`, and the `cliproxyapi` provider in the team's `~/.config/opencode/opencode.json`
-   points at the new address:
+3. **Their opencode config.** Add a provider of its own, alongside anything else they have. Do not
+   point the old team's `cliproxyapi` provider or its `OCTOROUTER_API_KEY` at this router: they belong
+   to the old setup. In `~/.config/opencode/opencode.json` (or their own overlay config):
    ```json
-   "cliproxyapi": {
+   "teamrouter": {
      "npm": "@ai-sdk/openai-compatible",
-     "name": "CLIProxyAPI",
+     "name": "Team router (za)",
      "options": {
        "baseURL": "https://<machine>.<tailnet>.ts.net/v1",
-       "apiKey": "{env:OCTOROUTER_API_KEY}"
+       "apiKey": "{env:TEAMROUTER_API_KEY}"
      }
    }
    ```
+   and `export TEAMROUTER_API_KEY="sk-team-..."` in their shell.
 
 Every key draws on the same connected provider accounts; there are no per-person quotas. To limit
 spend, set limits at the provider (for example on an API key).

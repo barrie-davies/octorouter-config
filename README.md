@@ -1,7 +1,8 @@
 # OctoRouter
 
 > **Origin.** Extracted from `barrie-davies/octopws-operational-tools` (`apps/octorouter`) with its git
-> history, up to commit `18b50a6` (2026-09-23). This is the deployment behind https://octorouter.octinho.com.
+> history, up to commit `18b50a6` (2026-09-23). It is an independent clone of the setup behind
+> https://octorouter.octinho.com, not a replacement for it: it shares no secrets, keys, logins or clients.
 >
 > **Before you deploy:** as written, `sst deploy --stage ops` targets the same SST app (`octorouter`),
 > stage, AWS account (`octoathlete-pr`) and domains as the live router. It would update that stack, not
