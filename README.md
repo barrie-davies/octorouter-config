@@ -12,6 +12,16 @@
 > - `keyName: 'octorouter-key'` in `infra/octorouter.ts`, because key pair names must be unique per region;
 > - the AWS profile and account, if it goes somewhere else.
 
+## Where it runs
+
+| Deployment | Guide | Reached via |
+|---|---|---|
+| **Office machine** (current) | [`office/README.md`](office/README.md) | Tailscale only; no AWS or domain |
+| AWS EC2 (original) | The rest of this file | `octorouter.octinho.com` |
+
+Both run the same `services/` stack. The office setup adds `office/docker-compose.override.yml` and
+`office/bootstrap.sh`; the EC2 files are unchanged.
+
 OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyAPI to manage multiple OAuth accounts and provides a unified OpenAI-compatible API, a management dashboard, and the upstream Cli-Proxy-API-Management-Center static UI.
 
 ## Endpoints
