@@ -19,6 +19,94 @@ Postgres (dashboard database), and a Docker socket proxy (lets the dashboard upd
 host, `tailscale serve` provides HTTPS and an `octorouter-webhook` service lets the dashboard redeploy
 itself. GPUs are not used: the router only forwards requests.
 
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph clients["Teammates' machines (in your tailnet)"]
+    oc["opencode<br/>provider teamrouter<br/>key from TEAMROUTER_API_KEY"]
+    browser["Browser (admin)"]
+  end
+
+  subgraph za["za: office Ubuntu machine"]
+      serve["tailscale serve<br/>HTTPS with a ts.net certificate<br/>:443 → 127.0.0.1:18317<br/>:8443 → 127.0.0.1:13000"]
+      subgraph docker["Docker (/opt/octorouter)"]
+        subgraph front["frontend network"]
+          cpa["cliproxyapi<br/>CLIProxyAPI router :8317<br/>checks client key, picks an account"]
+          dash["dashboard<br/>cliproxyapi-dashboard :3000"]
+        end
+        subgraph back["backend network (internal, no internet)"]
+          pg[("postgres<br/>dashboard data")]
+          dproxy["docker-proxy<br/>restricted Docker API"]
+        end
+      end
+      files[("config.yaml: client keys, provider API keys<br/>auths/: provider OAuth tokens<br/>.env: generated secrets")]
+      hook["octorouter-webhook<br/>docker0:9000 only"]
+      sock["Docker daemon"]
+  end
+
+  subgraph providers["Connected providers (internet, outbound HTTPS only)"]
+    claude["Anthropic / Claude"]
+    gemini["Google / Gemini"]
+    codex["OpenAI / Codex"]
+    other["OpenRouter and other<br/>OpenAI-compatible APIs"]
+  end
+
+  registries["Docker Hub / GHCR<br/>container images"]
+  old["Old router<br/>octorouter.octinho.com"]
+
+  oc -- "Tailscale: HTTPS /v1 + Bearer key" --> serve
+  browser -- "Tailscale: HTTPS :8443" --> serve
+  serve --> cpa
+  serve --> dash
+  cpa --- files
+  cpa --> claude
+  cpa --> gemini
+  cpa --> codex
+  cpa --> other
+  dash -- "management API /v0/management" --> cpa
+  dash --> pg
+  dash -- "update CLIProxyAPI" --> dproxy --> sock
+  dash -- "redeploy dashboard" --> hook --> sock
+  sock -. "image pulls" .-> registries
+
+  classDef isolated stroke-dasharray: 5 5,color:#888;
+  class old isolated;
+```
+
+- **Only inbound path:** a device in your tailnet calls `za.tailcbbc24.ts.net`. Tailscale ends HTTPS on
+  `za` and forwards it to ports that listen on loopback only. Nothing listens on the office network
+  or the internet.
+- **Only outbound paths:** CLIProxyAPI calling the providers, and Docker pulling images. Postgres and
+  the Docker socket proxy sit on an internal network with no internet access.
+- **Two kinds of key:** teammates' **client keys** (`api-keys:` in `config.yaml`) only grant access to
+  the router. The **provider credentials** (OAuth tokens in `auths/`, API keys in `config.yaml`) never
+  leave `za`. CLIProxyAPI attaches them to upstream requests and rotates between accounts
+  (round-robin, moving to the next when one hits its quota).
+- **The old router** (dashed) has no connection to any of this. The two may use the same providers
+  only if you connect the same accounts to both.
+- **Not involved:** the local models on `za` (llama-swap and the Agent Console in `agent-console`) are
+  separate. The router doesn't use the GPUs.
+
+One request, end to end:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant OC as opencode (teammate)
+  participant TS as tailscale serve (za)
+  participant CPA as cliproxyapi (za)
+  participant P as Provider (e.g. Claude)
+  OC->>TS: POST https://za.tailcbbc24.ts.net/v1/chat/completions<br/>Authorization: Bearer sk-team-…
+  TS->>CPA: forward to 127.0.0.1:18317
+  CPA->>CPA: client key in api-keys? pick a connected account for the model
+  CPA->>P: upstream request with that account's token or API key
+  P-->>CPA: streamed response
+  CPA-->>TS: streamed, in OpenAI format
+  TS-->>OC: streamed response
+  Note over CPA,P: Quota exceeded? CLIProxyAPI retries on the next account
+```
+
 ## Origin and isolation
 
 This repo started as a copy of the octorouter.octinho.com deployment in
