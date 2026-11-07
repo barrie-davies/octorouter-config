@@ -1,5 +1,17 @@
 # OctoRouter
 
+> **Origin.** Extracted from `barrie-davies/octopws-operational-tools` (`apps/octorouter`) with its git
+> history, up to commit `18b50a6` (2026-09-23). This is the deployment behind https://octorouter.octinho.com.
+>
+> **Before you deploy:** as written, `sst deploy --stage ops` targets the same SST app (`octorouter`),
+> stage, AWS account (`octoathlete-pr`) and domains as the live router. It would update that stack, not
+> create a second one. For a separate router, change these first:
+> - the app `name` in `sst.config.ts`;
+> - `ROOT_DOMAIN`, `SUBZONE`, `API_DOMAIN` and `DASHBOARD_DOMAIN` in `infra/octorouter.ts`;
+> - both host names in `services/Caddyfile`, and `DASHBOARD_URL` and `API_URL` in `services/docker-compose.yml`;
+> - `keyName: 'octorouter-key'` in `infra/octorouter.ts`, because key pair names must be unique per region;
+> - the AWS profile and account, if it goes somewhere else.
+
 OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyAPI to manage multiple OAuth accounts and provides a unified OpenAI-compatible API, a management dashboard, and the upstream Cli-Proxy-API-Management-Center static UI.
 
 ## Endpoints
@@ -32,14 +44,13 @@ OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyA
 - AWS profile `octoathlete-pr` available locally (SSO login: `aws sso login --profile octoathlete-pr`)
 - AWS profile `octoathlete-shared` available for the one-time NS delegation step
 - SST installed
-- `bun install` run in the repository root
+- `bun install` run in this repository
 
 ### Secrets Setup
 Before deploying, set the following secrets for the `ops` stage (each command is the deploy account):
 
 ```bash
 export AWS_PROFILE=octoathlete-pr
-cd apps/octorouter
 bunx sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
 bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
 bunx sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
@@ -53,7 +64,6 @@ Deploy the stack to the `ops` stage:
 
 ```bash
 export AWS_PROFILE=octoathlete-pr
-cd apps/octorouter
 bunx sst deploy --stage ops
 ```
 

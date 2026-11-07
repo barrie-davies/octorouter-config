@@ -1,0 +1,9 @@
+node_modules
+.sst
+sst-env.d.ts
+services/config.yaml
+services/logs/
+services/auths/
+.env
+.env.local
+.DS_Store
