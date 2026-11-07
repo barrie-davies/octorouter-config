@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 Type=simple
 EnvironmentFile=/opt/octorouter/.env
-ExecStart=/usr/local/bin/webhook -hooks /opt/octorouter/webhook/webhook.yaml -ip 0.0.0.0 -port 9000 -verbose
+ExecStart=/usr/local/bin/webhook -hooks /opt/octorouter/webhook/webhook.yaml -ip {{WEBHOOK_IP}} -port 9000 -verbose
 Restart=always
 RestartSec=5
 

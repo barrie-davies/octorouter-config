@@ -1,269 +1,210 @@
-# OctoRouter
+# Team router (Octorouter clone on `za`)
 
-> **Origin.** Extracted from `barrie-davies/octopws-operational-tools` (`apps/octorouter`) with its git
-> history, up to commit `18b50a6` (2026-09-23). It is an independent clone of the setup behind
-> https://octorouter.octinho.com, not a replacement for it: it shares no secrets, keys, logins or clients.
->
-> **Before you deploy:** as written, `sst deploy --stage ops` targets the same SST app (`octorouter`),
-> stage, AWS account (`octoathlete-pr`) and domains as the live router. It would update that stack, not
-> create a second one. For a separate router, change these first:
-> - the app `name` in `sst.config.ts`;
-> - `ROOT_DOMAIN`, `SUBZONE`, `API_DOMAIN` and `DASHBOARD_DOMAIN` in `infra/octorouter.ts`;
-> - both host names in `services/Caddyfile`, and `DASHBOARD_URL` and `API_URL` in `services/docker-compose.yml`;
-> - `keyName: 'octorouter-key'` in `infra/octorouter.ts`, because key pair names must be unique per region;
-> - the AWS profile and account, if it goes somewhere else.
+A team LLM router: one OpenAI-compatible API in front of shared Claude, Gemini, Codex and other provider
+accounts, with a web dashboard to manage them. It runs on the office machine **`za`** (Ubuntu, 2× RTX
+3090) and the team reaches it over **Tailscale**. Nothing is exposed to the office network or the
+internet.
 
-## Where it runs
-
-| Deployment | Guide | Reached via |
-|---|---|---|
-| **Office machine** (current) | [`office/README.md`](office/README.md) | Tailscale only; no AWS or domain |
-| AWS EC2 (original) | The rest of this file | `octorouter.octinho.com` |
-
-Both run the same `services/` stack. The office setup adds `office/docker-compose.override.yml` and
-`office/bootstrap.sh`; the EC2 files are unchanged.
-
-OctoRouter is an EC2-based proxy for Claude and Gemini models. It uses CLIProxyAPI to manage multiple OAuth accounts and provides a unified OpenAI-compatible API, a management dashboard, and the upstream Cli-Proxy-API-Management-Center static UI.
-
-## Endpoints
-
-| URL | Purpose |
+| | |
 |---|---|
-| https://octorouter.octinho.com | OpenAI/Gemini/Claude-compatible proxy API |
-| https://octorouter.octinho.com/management.html | Upstream Cli-Proxy-API-Management-Center UI (bundled with CLIProxyAPI) |
-| https://dashboard.octorouter.octinho.com | Custom dashboard (cliproxyapi-dashboard) |
+| API | `https://za.tailcbbc24.ts.net/v1` |
+| Dashboard | `https://za.tailcbbc24.ts.net:8443` |
+| Management page | `https://za.tailcbbc24.ts.net/management.html` |
+| Runtime files | `/opt/octorouter` on `za` (config, secrets, provider logins) |
 
-## Services
+`bootstrap.sh` prints the actual addresses; they change if the machine or tailnet is renamed.
 
-| Service | Port | Description |
-|---|---|---|
-| postgres | — | PostgreSQL 16 database for the dashboard |
-| cliproxyapi | 8317 | OpenAI/Gemini/Claude proxy for CLI OAuth sessions |
-| docker-proxy | — | Restricted Docker socket proxy for container management |
-| dashboard | 3000 | Custom Web UI for managing CLIProxyAPI |
-| caddy | 80, 443 | Reverse proxy with automatic HTTPS; also serves the management-center static SPA |
+**Services** (`services/docker-compose.yml`): CLIProxyAPI (the router), cliproxyapi-dashboard (web UI),
+Postgres (dashboard database), and a Docker socket proxy (lets the dashboard update CLIProxyAPI). On the
+host, `tailscale serve` provides HTTPS and an `octorouter-webhook` service lets the dashboard redeploy
+itself. GPUs are not used: the router only forwards requests.
 
-## AWS / DNS Layout
+## Origin and isolation
 
-- **Deploy account**: `octoathlete-pr` (842091916323), region `eu-west-2`
-- **Apex domain**: `octinho.com` lives in `octoathlete-shared` (510537391651)
-- **Delegated zone**: SST creates `octorouter.octinho.com` as a hosted zone in the deploy account. After the first deploy you must add an `NS` record for `octorouter` in the apex zone (in the shared account) pointing to the four NS records output by SST as `DELEGATED_ZONE_NAMESERVERS`.
+This repo started as a copy of the octorouter.octinho.com deployment in
+`barrie-davies/octopws-operational-tools` (`apps/octorouter`), with its git history up to commit
+`18b50a6` (2026-09-23). The AWS/EC2 provisioning (SST, Caddy) has been removed; it is in the history if
+ever needed.
 
-## SST Deployment
+It is an **independent clone, not a replacement**. Nothing is shared with the old router:
 
-### Prerequisites
-- AWS profile `octoathlete-pr` available locally (SSO login: `aws sso login --profile octoathlete-pr`)
-- AWS profile `octoathlete-shared` available for the one-time NS delegation step
-- SST installed
-- `bun install` run in this repository
+- **Secrets:** `bootstrap.sh` generates new ones (Postgres, JWT, management key, deploy secret, first
+  client key). Old client keys and the old management key do not work here.
+- **Provider logins:** none are carried over. You connect accounts fresh in this dashboard.
+- **Network:** reachable only from devices in your own tailnet. The old server and anyone with old keys
+  have no route to it.
+- **Clients:** teammates use a separately named provider and key variable (section 2), so no existing
+  config is pointed here by accident. The old team repo (`opencode-config`) is not changed.
+- **Code:** this repo is private to you.
 
-### Secrets Setup
-Before deploying, set the following secrets for the `ops` stage (each command is the deploy account):
+---
 
+## 1. One-time setup
+
+1. **Tailscale** (already done for `za`): create an account at https://login.tailscale.com and, on the
+   admin console's **DNS** page, turn on **MagicDNS** and **HTTPS Certificates**.
+2. On `za`:
+   ```bash
+   git clone https://github.com/barrie-davies/octorouter-config.git ~/octorouter-config
+   sudo ~/octorouter-config/bootstrap.sh
+   ```
+   It installs Docker and Tailscale if missing (and signs the machine in to Tailscale if needed), then
+   starts everything. At the end it prints the addresses and the **first client key** (yours). Keep
+   that output.
+3. **Stop the machine sleeping**, or the router goes down with it:
+   ```bash
+   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+   ```
+4. **Connect provider accounts** in the dashboard (section 3). Sharing a personal consumer subscription
+   across a team may break that plan's terms; API keys or team plans are the safe option.
+5. **Check it** from any tailnet device:
+   ```bash
+   curl -H "Authorization: Bearer <client key>" https://za.tailcbbc24.ts.net/v1/models
+   ```
+
+Re-running `bootstrap.sh` is safe: it refreshes files from the repo and keeps `.env`, `config.yaml` and
+the stored logins.
+
+---
+
+## 2. Adding a teammate
+
+1. **Tailscale access.** Invite them to your tailnet (admin console → Users → Invite), or share just
+   `za` with them (Machines → za → Share). They install Tailscale and sign in. Then, in **Access
+   controls**, limit teammates to TCP ports **443 and 8443** on `za`, so they can't reach anything else
+   on it (SSH, other services).
+2. **Their own API key.** Generate one and add it to the `api-keys:` list, with their name as a comment:
+   ```bash
+   echo "sk-team-$(openssl rand -hex 24)"
+   sudo nano /opt/octorouter/config.yaml
+   cd /opt/octorouter && sudo docker compose restart cliproxyapi
+   ```
+   ```yaml
+   api-keys:
+     - "sk-team-..."  # admin (first key)
+     - "sk-team-..."  # alice
+   ```
+   To remove someone, delete their line and restart `cliproxyapi`.
+3. **Their opencode config.** A provider of its own, alongside anything else they have. Do not point the
+   old team's `cliproxyapi` provider or its `OCTOROUTER_API_KEY` at this router. In
+   `~/.config/opencode/opencode.json` (or their own overlay config):
+   ```json
+   "teamrouter": {
+     "npm": "@ai-sdk/openai-compatible",
+     "name": "Team router (za)",
+     "options": {
+       "baseURL": "https://za.tailcbbc24.ts.net/v1",
+       "apiKey": "{env:TEAMROUTER_API_KEY}"
+     }
+   }
+   ```
+   and `export TEAMROUTER_API_KEY="sk-team-..."` in their shell.
+
+Every key draws on the same connected provider accounts; there are no per-person quotas. To limit
+spend, set limits at the provider (for example on an API key).
+
+---
+
+## 3. Provider accounts
+
+**Claude (subscription OAuth):** in the dashboard, open the Claude OAuth section and follow the
+browser sign-in. The tokens are saved and picked up automatically.
+
+**Gemini (Google OAuth):** needs a one-off container on `za`, run from a terminal on `za` itself (the
+sign-in callback goes to `localhost:8085`; from another machine, first `ssh -L 8085:localhost:8085 za`):
 ```bash
-export AWS_PROFILE=octoathlete-pr
-bunx sst secret set OctoRouterSshPublicKey "ssh-ed25519 ..." --stage ops
-bunx sst secret set OctoRouterSshAllowedCidr "1.2.3.4/32" --stage ops
-bunx sst secret set OctoRouterPostgresPassword "$(openssl rand -hex 32)" --stage ops
-bunx sst secret set OctoRouterJwtSecret "$(openssl rand -base64 32)" --stage ops
-bunx sst secret set OctoRouterManagementApiKey "$(openssl rand -hex 32)" --stage ops
-bunx sst secret set OctoRouterDeploySecret "$(openssl rand -hex 32)" --stage ops
+cd /opt/octorouter
+sudo docker run --rm -it \
+  -p 127.0.0.1:8085:8085 \
+  -v /opt/octorouter/auths:/root/.cli-proxy-api \
+  -v /opt/octorouter/config.yaml:/CLIProxyAPI/config.yaml:ro \
+  eceasy/cli-proxy-api-plus:latest \
+  ./CLIProxyAPIPlus -login -no-browser
 ```
+Open the Google URL it prints, sign in, choose **2** (Google One mode), then
+`sudo docker compose restart cliproxyapi`. Don't use `docker exec` on the running container for this:
+the login tries to bind port 8317, which is already in use.
 
-### Deploy Command
-Deploy the stack to the `ops` stage:
+**API keys** (Gemini AI Studio, OpenAI/Codex, Anthropic, OpenRouter, ...): paste them in the dashboard,
+or uncomment the matching block at the end of `/opt/octorouter/config.yaml` and restart `cliproxyapi`.
 
-```bash
-export AWS_PROFILE=octoathlete-pr
-bunx sst deploy --stage ops
-```
+---
 
-### One-time NS Delegation (after first deploy)
-
-SST outputs `DELEGATED_ZONE_NAMESERVERS` — a list of four AWS NS hostnames. Add an `NS` record for the name `octorouter` in the `octinho.com` hosted zone in `octoathlete-shared` pointing to those four nameservers (TTL 300):
-
-```bash
-NS_LIST=$(bunx sst outputs --stage ops | awk -F': ' '/DELEGATED_ZONE_NAMESERVERS/{print $2}')
-ZONE_ID=$(aws --profile octoathlete-shared route53 list-hosted-zones \
-  --query 'HostedZones[?Name==`octinho.com.`].Id' --output text | sed 's|/hostedzone/||')
-
-cat > /tmp/octorouter-ns.json <<JSON
-{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{
-  "Name":"octorouter.octinho.com.","Type":"NS","TTL":300,
-  "ResourceRecords":[
-    $(echo "$NS_LIST" | tr -d '[]"' | tr ',' '\n' | xargs -I{} printf '{"Value":"{}"},' | sed 's/,$//')
-  ]}}]}
-JSON
-
-aws --profile octoathlete-shared route53 change-resource-record-sets \
-  --hosted-zone-id "$ZONE_ID" --change-batch file:///tmp/octorouter-ns.json
-```
-
-This is a one-time step. Subsequent deploys reuse the same delegated zone.
-
-## Post-Deploy Setup
-
-### 1. SSH into instance
-Connect to the OctoRouter instance using the `ec2-user`:
-
-```bash
-ssh ec2-user@octorouter.octinho.com
-```
-
-### 2. Set up config.yaml
-Navigate to the application directory and create your configuration file from the template:
+## 4. Running it
 
 ```bash
 cd /opt/octorouter
-cp config.example.yaml config.yaml
-```
-
-Edit `config.yaml` to set your secrets:
-- **Management Secret**: Use the same value as `OctoRouterManagementApiKey`.
-- **API Keys**: Generate at least one API key for clients to connect.
-  ```bash
-  openssl rand -hex 32
-  ```
-
-### 3. Restart services
-Apply the configuration changes by restarting the Docker containers:
-
-```bash
-docker compose down && docker compose up -d
-```
-
-### 4. Verify API is running
-Check if the API is responding correctly using your newly generated API key:
-
-```bash
-curl -H "Authorization: Bearer YOUR_API_KEY" https://octorouter.octinho.com/v1/models
-```
-
-### 5. Dashboard access
-The dashboard is available at: https://dashboard.octorouter.octinho.com
-
-## Claude Max OAuth
-Claude OAuth can be configured directly through the dashboard.
-
-1. Open the dashboard at https://dashboard.octorouter.octinho.com
-2. Navigate to the Claude OAuth section
-3. Follow the browser-based authorization flow to link your Claude account
-
-After completing the flow, the auth tokens are saved automatically and the service picks them up.
-
-## Gemini OAuth
-Gemini OAuth requires an SSH tunnel for the callback and a one-shot `docker run` command.
-
-1. **Open SSH Tunnel**: On your **local machine**, open a tunnel for the OAuth callback:
-   ```bash
-   ssh -L 8085:localhost:8085 ec2-user@octorouter.octinho.com
-   ```
-2. **Run OAuth Command**: On the EC2 instance, run a temporary container for the login flow:
-   ```bash
-   cd /opt/octorouter
-   docker run --rm -it \
-     -p 8085:8085 \
-     -v /opt/octorouter/auths:/root/.cli-proxy-api \
-     -v /opt/octorouter/config.yaml:/CLIProxyAPI/config.yaml:ro \
-     eceasy/cli-proxy-api-plus:latest \
-     ./CLIProxyAPIPlus -login -no-browser
-   ```
-3. **Complete in Browser**: Open the Google URL printed in the terminal, log in, and choose **2** (Google One mode) when prompted.
-4. **Restart the service** to pick up the new auth tokens:
-   ```bash
-   docker compose restart cliproxyapi
-   ```
-
-> **Note:** Do not use `docker exec` on the running container for auth — the binary will try to bind port 8317 which is already in use. The `docker run` approach starts a fresh temporary container instead.
-
-## Maintenance
-
-### Update CLIProxyAPI (preferred — from the dashboard)
-The CLIProxyAPI proxy can be upgraded without SSH access:
-
-1. Open https://dashboard.octorouter.octinho.com
-2. The dashboard polls Docker Hub for new tags of `eceasy/cli-proxy-api-plus`. When a newer version is available, an "Update Available" banner appears.
-3. Click the specific version button (e.g. **v6.9.30-0**) in the *Available Versions* row. Avoid the **Update to Latest** button — it sends `version=latest` and unpins the running container's tag, which breaks version display.
-4. After a successful upgrade, **bump the tag in `services/docker-compose.yml`** in this repo and redeploy via SST so fresh installs and host reboots come up on the same version.
-
-How it works: the dashboard's `POST /api/update` calls `docker pull <image>:<version>` then `docker run` with the previous container's env, volumes, ports, and networks (compose plugin isn't installed in the dashboard image, so the compose-based path is skipped). Access to the Docker daemon is brokered through the read-write-restricted `tecnativa/docker-socket-proxy` sidecar (`CONTAINERS`, `IMAGES`, `POST`, `NETWORKS` enabled — everything else denied).
-
-The `cliproxyapi` service in `docker-compose.yml` MUST stay pinned to a versioned tag (e.g. `eceasy/cli-proxy-api-plus:v6.9.28-0`). The dashboard parses the running version from `Config.Image`, so a bare `:latest` tag makes the UI report "latest" forever and the auto-update banner stops working.
-
-> **Drift warning**: dashboard updates only change the running container — they do **not** touch this compose file. If you upgrade via the dashboard but skip step 4, a host reboot or `docker compose up -d` will recreate the container at the older tag still in compose, silently downgrading the proxy. Always bump the tag in this repo after a dashboard update.
-
-> **Known dashboard quirk**: the *Update Available* banner shows even when current and latest match. The dashboard compares the local image config ID against the Docker Hub registry digest — different SHA spaces, never equal. Ignore the banner unless `Latest Version` is genuinely newer than `Current Version`.
-
-### Update CLIProxyAPI (manual fallback, requires SSH)
-```bash
-cd /opt/octorouter
-docker compose pull && docker compose up -d
-```
-
-### Check Logs
-View real-time logs for troubleshooting:
-
-```bash
-docker compose logs -f cliproxyapi
-```
-
-## Troubleshooting
-
-### Caddy Certificate Issues
-If HTTPS is not working, check Caddy logs:
-```bash
-docker compose logs caddy
-```
-Ensure port 80 and 443 are open in the EC2 Security Group for Let's Encrypt challenges.
-
-### OAuth Callback Fails
-- Ensure the SSH tunnel is active on port 8085 for Gemini OAuth.
-- Check that no other service is using that port on your local machine.
-- For Claude, use the dashboard instead — no tunnel needed.
-
-### Containers Not Starting
-Check the status of the containers:
-```bash
-docker compose ps
-```
-If a container is in a restart loop, check its logs for configuration errors in `config.yaml`.
-
-## Dashboard Deploy Webhook
-
-The dashboard can redeploy itself from its admin panel. This is powered by
-[adnanh/webhook](https://github.com/adnanh/webhook) running on the host
-(systemd: `octorouter-webhook`) and listening on port 9000 on the Docker
-host gateway only — never exposed to the public internet.
-
-Setup is automatic via SST user-data. The `DEPLOY_SECRET` SST secret is
-rendered into both `/opt/octorouter/.env` (picked up by the dashboard
-container) and `/opt/octorouter/webhook/webhook.yaml` (validated as the
-`X-Deploy-Token` header on every hook call).
-
-### Endpoints (called from dashboard container only)
-- `POST http://host.docker.internal:9000/hooks/deploy-dashboard` — pull + recreate dashboard
-- `POST http://host.docker.internal:9000/hooks/deploy-dashboard-nocache` — same (no-cache flag is a no-op for prebuilt images)
-- `POST http://host.docker.internal:9000/hooks/deploy-status` — read last deploy status JSON
-- `POST http://host.docker.internal:9000/hooks/deploy-log` — read last deploy log
-
-### Managing the webhook service
-```bash
+sudo docker compose ps
+sudo docker compose logs -f cliproxyapi
 sudo systemctl status octorouter-webhook
+tailscale serve status
+```
+
+- **Management key** (admin login for the dashboard and `/management.html`):
+  `sudo sed -n 's/^MANAGEMENT_API_KEY=//p' /opt/octorouter/.env`
+- **Back up** `/opt/octorouter/.env`, `config.yaml` and `auths/`. They hold every secret and provider
+  login.
+- **Containers not starting:** `sudo docker compose ps`; for one in a restart loop, check its logs,
+  usually for an error in `config.yaml`.
+- **HTTPS not working:** `tailscale serve status`, and check HTTPS Certificates is on in the Tailscale
+  admin console.
+
+### Updating CLIProxyAPI
+
+From the dashboard (preferred): when it shows an *Update Available* banner, click the specific version
+button in the *Available Versions* row. Avoid **Update to Latest**: it unpins the tag and the dashboard
+then shows "latest" forever. Afterwards, **bump the image tag in `services/docker-compose.yml`**, commit,
+pull on `za`, and re-run `bootstrap.sh`.
+
+> **Drift warning:** dashboard updates change only the running container, not the compose file. If you
+> skip the bump, a reboot or `docker compose up -d` recreates the container at the older tag in compose,
+> silently downgrading it. The `cliproxyapi` image must stay pinned to a versioned tag.
+
+> **Known quirk:** the *Update Available* banner shows even when current and latest match (it compares
+> different kinds of image ID). Ignore it unless *Latest Version* is genuinely newer.
+
+Manual update: `cd /opt/octorouter && sudo docker compose pull && sudo docker compose up -d`.
+
+### Dashboard deploy webhook
+
+The dashboard can redeploy itself from its admin panel through
+[adnanh/webhook](https://github.com/adnanh/webhook) on the host (systemd: `octorouter-webhook`),
+listening on port 9000 on the Docker bridge only. The deploy secret in `/opt/octorouter/.env` is
+checked as the `X-Deploy-Token` header on every call. Hooks, called by the dashboard container only:
+`deploy-dashboard`, `deploy-dashboard-nocache` (same thing; the image is prebuilt), `deploy-status`,
+`deploy-log`, all at `http://host.docker.internal:9000/hooks/<id>`.
+
+```bash
 sudo journalctl -u octorouter-webhook -f
 sudo tail -f /var/log/octorouter/dashboard-deploy.log
 ```
 
-## EC2 Directory Layout
+---
+
+## 5. Layout
+
 ```
-/opt/octorouter/
-├── .env              # generated from SST secrets — never edit manually
-├── docker-compose.yml
-├── Caddyfile
-├── config.yaml       # edit this manually after deploy
-├── config.example.yaml
-├── auths/            # CLIProxyAPI OAuth tokens
-├── logs/             # container logs
-└── webhook/          # adnanh/webhook config + deploy script
-    ├── webhook.yaml
-    └── deploy-dashboard.sh
+bootstrap.sh                 sets up or refreshes everything on za
+services/
+  docker-compose.yml         the stack
+  config.example.yaml        CLIProxyAPI config template (bootstrap fills in the first key)
+  webhook/                   deploy webhook: hooks, script, systemd unit
+
+/opt/octorouter/ on za       (created by bootstrap.sh; never commit any of it)
+  .env                       generated secrets and the Tailscale URLs
+  config.yaml                CLIProxyAPI config, including team API keys
+  docker-compose.yml
+  auths/                     provider OAuth tokens
+  logs/
+  webhook/
 ```
+
+## 6. Removing it
+
+```bash
+tailscale serve reset
+cd /opt/octorouter && sudo docker compose down        # add -v to also delete the database
+sudo systemctl disable --now octorouter-webhook
+sudo rm /etc/systemd/system/octorouter-webhook.service
+```
+Then delete `/opt/octorouter` if you no longer need the logins and keys in it.

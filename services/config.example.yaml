@@ -2,14 +2,15 @@
 # Copy this file to config.yaml and fill in your values
 # NEVER commit config.yaml — it contains secrets!
 #
-# EC2/Docker deployment: auth-dir is /root/.cli-proxy-api (container path)
+# Docker deployment: auth-dir is /root/.cli-proxy-api (container path)
 # Full reference: https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml
 
 host: ""
 port: 8317
 
-# Caddy reaches cliproxyapi over the cliproxyapi_frontend bridge, so without
-# this every client resolves to Caddy's container IP. Since v7.3.x (a962b77d)
+# `tailscale serve` reaches cliproxyapi through Docker's published port, so
+# requests arrive from a Docker bridge address. Without this every client
+# resolves to that one address. Since v7.3.x (a962b77d)
 # the default [] ignores X-Forwarded-For, which makes the management
 # failed-login ban (5 failures -> 30 min) lock out every user at once.
 trusted-proxies:

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Set up the team Octorouter on this Ubuntu machine, reachable over Tailscale only.
 #
-#   sudo office/bootstrap.sh        (from a clone of this repo)
+#   sudo ./bootstrap.sh        (from a clone of this repo)
 #
-# Does what the EC2 user-data in ../infra/octorouter.ts did, without AWS:
-#   - files come from this repo instead of S3, into the same /opt/octorouter layout;
-#   - secrets are generated here once instead of coming from SST secrets;
-#   - `tailscale serve` provides HTTPS on the tailnet instead of Caddy + Let's Encrypt;
-#   - the deploy webhook listens on the Docker bridge only, not on every interface.
+# Installs Docker and Tailscale if missing, puts the stack in /opt/octorouter, generates its secrets,
+# installs the dashboard's deploy webhook (listening on the Docker bridge only), starts the containers,
+# and publishes them on the tailnet with `tailscale serve`. Nothing is reachable from the office
+# network or the internet.
 #
 # Safe to re-run: it refreshes compose and webhook files from the repo, and never overwrites
 # /opt/octorouter/.env, config.yaml or auths/ once they exist.
@@ -16,7 +15,7 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo: sudo $0" >&2; exit 1; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SERVICES="$HERE/../services"
+SERVICES="$HERE/services"
 DIR=/opt/octorouter
 LOGDIR=/var/log/octorouter
 API_PORT=18317
@@ -55,16 +54,14 @@ esac
 API_URL="https://$TS_NAME"
 DASHBOARD_URL="https://$TS_NAME:8443"
 
-# ── 3. Files, same layout as EC2 ─────────────────────────────────────────────
+# ── 3. Files ─────────────────────────────────────────────────────────────────
 log "installing files into $DIR"
 mkdir -p "$DIR/auths" "$DIR/logs" "$DIR/webhook" "$LOGDIR"
 install -m 0644 "$SERVICES/docker-compose.yml"           "$DIR/docker-compose.yml"
-install -m 0644 "$HERE/docker-compose.override.yml"      "$DIR/docker-compose.override.yml"
-install -m 0644 "$SERVICES/Caddyfile"                    "$DIR/Caddyfile"
 install -m 0644 "$SERVICES/config.example.yaml"          "$DIR/config.example.yaml"
 install -m 0755 "$SERVICES/webhook/deploy-dashboard.sh"  "$DIR/webhook/deploy-dashboard.sh"
 
-# ── 4. Secrets (.env): generated once, in place of the SST secrets ───────────
+# ── 4. Secrets (.env): generated once ────────────────────────────────────────
 if [ ! -f "$DIR/.env" ]; then
   log "generating secrets in $DIR/.env"
   umask 077
@@ -101,7 +98,7 @@ GW="$(ip -4 -o addr show docker0 | awk '{print $4}' | cut -d/ -f1)"
 [ -n "$GW" ] || { echo "No docker0 address found; is Docker running?" >&2; exit 1; }
 sed "s|{{DEPLOY_SECRET}}|$DEPLOY_SECRET|g" "$SERVICES/webhook/webhook.yaml" > "$DIR/webhook/webhook.yaml"
 chmod 0600 "$DIR/webhook/webhook.yaml"
-sed "s|-ip 0.0.0.0|-ip $GW|" "$SERVICES/webhook/octorouter-webhook.service" > /etc/systemd/system/octorouter-webhook.service
+sed "s|{{WEBHOOK_IP}}|$GW|" "$SERVICES/webhook/octorouter-webhook.service" > /etc/systemd/system/octorouter-webhook.service
 if [ ! -x /usr/local/bin/webhook ]; then
   log "installing adnanh/webhook $WEBHOOK_VERSION"
   tmp="$(mktemp -d)"
@@ -142,5 +139,5 @@ EOF
 cat <<EOF
 
 Check it:  curl -H "Authorization: Bearer <client key>" $API_URL/v1/models
-Next: connect provider accounts in the dashboard, then add a key per teammate (see office/README.md).
+Next: connect provider accounts in the dashboard, then add a key per teammate (see README.md).
 EOF

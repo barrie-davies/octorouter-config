@@ -39,12 +39,16 @@ services:
       - frontend
       - backend
     volumes:
-      # Service config (flat EC2 layout — sits beside docker-compose.yml)
+      # Service config (sits beside docker-compose.yml in /opt/octorouter)
       - ./config.yaml:/CLIProxyAPI/config.yaml
       # OAuth session tokens (Claude, Gemini, Codex ...)
       - ${CLIPROXYAPI_AUTH_DIR:-./auths}:/root/.cli-proxy-api
       # Service logs
       - ./logs:/CLIProxyAPI/logs
+    ports:
+      # Loopback only: `tailscale serve` forwards https://<machine>.<tailnet>.ts.net here.
+      # 18317 avoids the legacy local router on 8317.
+      - "127.0.0.1:18317:8317"
     environment:
       DEPLOY: ${CLIPROXYAPI_DEPLOY:-}
       MANAGEMENT_PASSWORD: ${MANAGEMENT_API_KEY}
@@ -115,10 +119,14 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       NODE_ENV: production
       DOCKER_HOST: tcp://docker-proxy:2375
-      DASHBOARD_URL: https://dashboard.octorouter.octinho.com
-      API_URL: https://octorouter.octinho.com
+      # Set by bootstrap.sh from this machine's Tailscale name.
+      DASHBOARD_URL: ${DASHBOARD_URL}
+      API_URL: ${API_URL}
       WEBHOOK_HOST: ${WEBHOOK_HOST}
       DEPLOY_SECRET: ${DEPLOY_SECRET}
+    ports:
+      # Loopback only: `tailscale serve` forwards https://<machine>.<tailnet>.ts.net:8443 here.
+      - "127.0.0.1:13000:3000"
     volumes:
       - ./docker-compose.yml:/opt/cliproxyapi/infrastructure/docker-compose.yml:ro
     extra_hosts:
@@ -137,37 +145,8 @@ services:
       retries: 3
       start_period: 40s
 
-  # ---------------------------------------------------------------------------
-  # Caddy — reverse proxy + TLS termination
-  # Only service with host port bindings (80/443).
-  # ---------------------------------------------------------------------------
-  caddy:
-    image: caddy:2-alpine
-    container_name: cliproxyapi-caddy
-    restart: unless-stopped
-    networks:
-      - frontend
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      cliproxyapi:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:2019/metrics"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
 volumes:
   postgres_data:
-  caddy_data:
-  caddy_config:
 
 networks:
   frontend:
