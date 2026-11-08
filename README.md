@@ -107,6 +107,29 @@ sequenceDiagram
   Note over CPA,P: Quota exceeded? CLIProxyAPI retries on the next account
 ```
 
+## Other services on za
+
+The router shares za with other services, each on its own Tailscale Serve port (tailnet only):
+
+| HTTPS port | Service |
+|---|---|
+| 443 | This router's API (`127.0.0.1:18317`) |
+| 8443 | This router's dashboard (`127.0.0.1:13000`) |
+| 8444 | Knowledge Studio |
+| 8445 | Infisical (secrets manager) |
+| 8446 | Agent Console |
+
+Pick a free port when adding another app; don't reuse 443 or 8443.
+
+**Knowledge Studio uses this router** for all its AI calls. It runs on za, so it calls the loopback
+address directly (`OCTOROUTER_URL=http://127.0.0.1:18317/v1/chat/completions`) with a client key from
+`api-keys:` in `/opt/octorouter/config.yaml`, stored in Infisical as `OCTOROUTER_API_KEY`. Revoking that
+key cuts Knowledge Studio off; rotate it in both places. The old public `octorouter.octinho.com`
+address is retired.
+
+The whole machine (services, secrets, backups, GPUs) is mapped in the
+[za infrastructure guide](https://github.com/barrie-davies/knowledge-studio/blob/main/docs/za-infrastructure.md).
+
 ## Origin and isolation
 
 This repo started as a copy of the octorouter.octinho.com deployment in
