@@ -68,14 +68,6 @@ oauth-model-alias:
       alias: claude-haiku-4-5
       fork: true
 
-# Models the shared model list (router-for-me/models) advertises for a login but
-# its upstream doesn't serve: hidden so clients can't pick them. Antigravity
-# answers 404 for these on our Google Workspace account (checked 2026-11-18).
-oauth-excluded-models:
-  antigravity:
-    - "claude-opus-5-5-high"
-    - "gemini-4-carbon-high"
-
 # ---------------------------------------------------------------------------
 # Provider credentials — uncomment and populate as needed
 # Full reference: https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml
